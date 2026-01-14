@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>VK Ads Excel Converter</title>
+  <title>VK Ads Excel Enricher</title>
 
   <!-- Author: mirthfulnik -->
   <style>
@@ -40,305 +40,59 @@
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Обработчик Excel из ВК Рекламы (уровень групп)</h1>
-      <p>
-        Загрузи выгрузку <code>.xlsx</code> → получи файл с колонками CPM / CR1 / CR2 + плановыми полями и зелёным условным форматированием.
-      </p>
+<div class="wrap">
+  <div class="card">
+    <h1>Обработчик Excel из ВК Рекламы (уровень групп)</h1>
+    <p>Загрузи выгрузку → получи CPM / CR1 / CR2 и плановые метрики.</p>
 
-      <div class="row">
-        <input id="file" type="file" accept=".xlsx" />
-        <button id="run" disabled>Обработать и скачать</button>
-      </div>
-
-      <div class="hint">
-        Ожидается лист <code>Группы</code> и колонки: «Потрачено всего, ₽», «Показы», «Начали прослушивание», «Добавили аудио».
-      </div>
-
-      <div id="log" class="log"></div>
+    <div class="row">
+      <input id="file" type="file" accept=".xlsx" />
+      <button id="run" disabled>Обработать и скачать</button>
     </div>
-  </div>
 
-  <div id="overlay" class="overlay">
-    <div class="spinnerBox">
-      <div class="yin">☯️</div>
-      <p>Обрабатываю файл…</p>
-      <div class="small">Author: mirthfulnik</div>
+    <div class="hint">
+      Ожидается лист <code>Группы</code> и стандартная выгрузка ВК.
     </div>
+
+    <div id="log" class="log"></div>
   </div>
+</div>
 
-  <!-- ExcelJS + FileSaver (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+<div id="overlay" class="overlay">
+  <div class="spinnerBox">
+    <div class="yin">☯️</div>
+    <p>Обрабатываю файл…</p>
+    <div class="small">Author: mirthfulnik</div>
+  </div>
+</div>
 
-  <script>
-    // Author: mirthfulnik
-    // Fix 2026-01-14: устранён сдвиг данных на 1 колонку (ExcelJS addRow с массивом использует 0-based)
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 
-    const $file = document.getElementById('file');
-    const $run  = document.getElementById('run');
-    const $log  = document.getElementById('log');
-    const $overlay = document.getElementById('overlay');
+<script>
+/* ==== CONDITIONAL FORMATTING FIX ====
+   Only soft green fill, NO font recoloring
+   Author: mirthfulnik
+==================================== */
 
-    $file.addEventListener('change', () => {
-      $run.disabled = !$file.files || !$file.files[0];
-      $log.textContent = '';
-    });
+const fillGreenSoft = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: '80C6EFCE' } // 50% transparent green
+};
 
-    $run.addEventListener('click', async () => {
-      if (!$file.files || !$file.files[0]) return;
+function addCF(ws, colIndex, lastRow, formula) {
+  const col = String.fromCharCode(64 + colIndex);
+  ws.addConditionalFormatting({
+    ref: `${col}2:${col}${lastRow}`,
+    rules: [{
+      type: 'expression',
+      formulae: [formula],
+      style: { fill: fillGreenSoft }
+    }]
+  });
+}
+</script>
 
-      const inFile = $file.files[0];
-      const baseName = (inFile.name || 'vk_export.xlsx').replace(/\.xlsx$/i, '');
-      const outName = baseName + ' (enriched).xlsx';
-
-      showOverlay(true);
-      log('Читаю файл…');
-
-      try {
-        const buffer = await inFile.arrayBuffer();
-        const inWb = new ExcelJS.Workbook();
-        await inWb.xlsx.load(buffer);
-
-        const inWs = inWb.getWorksheet('Группы') || inWb.worksheets[0];
-        if (!inWs) throw new Error('Не найден ни один лист в книге.');
-
-        log('Нашёл лист: ' + (inWs.name || '(без имени)'));
-        const headerRow = inWs.getRow(1);
-
-        // Read headers (1-based cells)
-        const srcHeaders = [];
-        for (let c = 1; c <= inWs.columnCount; c++) {
-          srcHeaders.push(headerRow.getCell(c).value ?? '');
-        }
-
-        // Normalize helper
-        const norm = (s) => String(s ?? '')
-          .trim()
-          .replace(/\s+/g, ' ')
-          .toLowerCase()
-          .replace(/ё/g, 'е');
-
-        // Build header map: normalizedHeader -> index (1-based)
-        const map = new Map();
-        srcHeaders.forEach((h, idx) => map.set(norm(h), idx + 1));
-
-        const need = {
-          spent: 'потрачено всего, ₽',
-          impr:  'показы',
-          start: 'начали прослушивание',
-          add:   'добавили аудио',
-        };
-
-        const spentCol = map.get(need.spent);
-        const imprCol  = map.get(need.impr);
-        const startCol = map.get(need.start);
-        const addCol   = map.get(need.add);
-
-        const missing = [];
-        if (!spentCol) missing.push('«Потрачено всего, ₽»');
-        if (!imprCol)  missing.push('«Показы»');
-        if (!startCol) missing.push('«Начали прослушивание»');
-        if (!addCol)   missing.push('«Добавили аудио»');
-
-        if (missing.length) {
-          throw new Error('Не найдены обязательные колонки: ' + missing.join(', ') +
-            '.\nПроверь, что это выгрузка ВК на уровне групп и что заголовки в первой строке.');
-        }
-
-        log('Колонки найдены: spent=' + spentCol + ', impr=' + imprCol + ', start=' + startCol + ', add=' + addCol);
-
-        // Create output workbook
-        const outWb = new ExcelJS.Workbook();
-        outWb.creator = 'mirthfulnik';
-        outWb.created = new Date();
-
-        const outWs = outWb.addWorksheet(inWs.name || 'Группы', {
-          views: [{ state: 'frozen', ySplit: 1 }]
-        });
-
-        // New columns that will be inserted before original VK columns
-        const NEW_HEADERS = [
-          'Аудитория',
-          'Охвачено',
-          'Потенциальный охват',
-          'Бюджет',
-          'Прогноз добавлений',
-          'CPM',
-          'CR1',
-          'CR2'
-        ];
-
-        const outHeaders = NEW_HEADERS.concat(srcHeaders.map(h => (h ?? '')));
-
-        outWs.addRow(outHeaders);
-
-        // Style header
-        const hdr = outWs.getRow(1);
-        hdr.font = { bold: true };
-        hdr.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-        hdr.height = 22;
-
-        // Column widths (simple defaults)
-        const widths = [18, 12, 20, 14, 18, 10, 10, 10];
-        for (let i = 1; i <= NEW_HEADERS.length; i++) outWs.getColumn(i).width = widths[i-1] || 14;
-        for (let i = NEW_HEADERS.length + 1; i <= outHeaders.length; i++) outWs.getColumn(i).width = 18;
-
-        // Helpers: col index -> Excel letter (1-based)
-        function colToLetter(col) {
-          let temp = col, letter = '';
-          while (temp > 0) {
-            let mod = (temp - 1) % 26;
-            letter = String.fromCharCode(65 + mod) + letter;
-            temp = Math.floor((temp - mod) / 26);
-          }
-          return letter;
-        }
-
-        const newOffset = NEW_HEADERS.length; // number of inserted columns (8)
-
-        const outSpentCol = newOffset + spentCol;
-        const outImprCol  = newOffset + imprCol;
-        const outStartCol = newOffset + startCol;
-        const outAddCol   = newOffset + addCol;
-
-        const lastInRow = Math.max(2, inWs.actualRowCount || inWs.rowCount || 2);
-
-        log('Копирую строки и проставляю формулы…');
-
-        for (let r = 2; r <= lastInRow; r++) {
-          const inRow = inWs.getRow(r);
-
-          // Stop if row is fully empty
-          const values = inRow.values || [];
-          const hasAny = values.some((v, idx) => idx > 0 && v !== null && v !== undefined && v !== '');
-          if (!hasAny) continue;
-
-          // IMPORTANT: ExcelJS addRow(array) is 0-based: array[0] -> column 1
-          const outRowVals = new Array(outHeaders.length).fill(null);
-
-          // Copy original values shifted right by newOffset columns
-          for (let c = 1; c <= srcHeaders.length; c++) {
-            outRowVals[(newOffset) + (c - 1)] = inRow.getCell(c).value; // 0-based index
-          }
-
-          const outRow = outWs.addRow(outRowVals);
-          const outR = outRow.number;
-
-          const spentAddr = `${colToLetter(outSpentCol)}${outR}`;
-          const imprAddr  = `${colToLetter(outImprCol)}${outR}`;
-          const startAddr = `${colToLetter(outStartCol)}${outR}`;
-          const addAddr   = `${colToLetter(outAddCol)}${outR}`;
-
-          const audAddr   = `A${outR}`;
-          const reachAddr = `B${outR}`;
-          const potAddr   = `C${outR}`;
-          const budAddr   = `D${outR}`;
-          const foreAddr  = `E${outR}`;
-          const cpmAddr   = `F${outR}`;
-          const cr1Addr   = `G${outR}`;
-          const cr2Addr   = `H${outR}`;
-
-          // Rule: if Start=0 AND Add=0 => blank
-          const blankIfBothZero = `AND(${startAddr}=0,${addAddr}=0)`;
-
-          outWs.getCell(cpmAddr).value = {
-            formula: `IF(${blankIfBothZero},"",IFERROR(${spentAddr}/${imprAddr}*1000,""))`
-          };
-
-          outWs.getCell(cr1Addr).value = {
-            formula: `IF(${blankIfBothZero},"",IFERROR(${startAddr}/${imprAddr},""))`
-          };
-
-          outWs.getCell(cr2Addr).value = {
-            formula: `IF(${blankIfBothZero},"",IFERROR(${addAddr}/${startAddr},""))`
-          };
-
-          outWs.getCell(potAddr).value = {
-            formula: `IF(OR(${audAddr}="",${reachAddr}=""),"",${audAddr}/2-${reachAddr})`
-          };
-
-          // Budget must remain editable (no sheet protection is applied)
-          outWs.getCell(budAddr).value = {
-            formula: `IF(OR(${potAddr}="",${cpmAddr}=""),"",${potAddr}/1000*${cpmAddr})`
-          };
-
-          outWs.getCell(foreAddr).value = {
-            formula: `IF(OR(${potAddr}="",${cr1Addr}="",${cr2Addr}=""),"",${potAddr}*${cr1Addr}*${cr2Addr})`
-          };
-        }
-
-        const lastOutRow = outWs.lastRow ? outWs.lastRow.number : 2;
-
-        // Formats
-        outWs.getColumn(6).numFmt = '0.00';    // CPM
-        outWs.getColumn(7).numFmt = '0.00%';   // CR1
-        outWs.getColumn(8).numFmt = '0.00%';   // CR2
-        outWs.getColumn(4).numFmt = '#,##0.00';// Budget
-        outWs.getColumn(5).numFmt = '#,##0';   // Forecast adds
-        outWs.getColumn(3).numFmt = '#,##0';   // Potential reach
-        outWs.getColumn(1).numFmt = '#,##0';   // Audience
-        outWs.getColumn(2).numFmt = '#,##0';   // Reached
-
-        // Conditional formatting (green)
-        const fillGreen = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
-        const fontGreen = { color: { argb: 'FF006100' } };
-
-        function addCF(colIndex, ruleFormula) {
-          const colLetter = colToLetter(colIndex);
-          const ref = `${colLetter}2:${colLetter}${lastOutRow}`;
-          outWs.addConditionalFormatting({
-            ref,
-            rules: [{
-              type: 'expression',
-              formulae: [ruleFormula],
-              style: { fill: fillGreen, font: fontGreen }
-            }]
-          });
-        }
-
-        addCF(6, `AND(F2<>"",F2<AVERAGE($F$2:$F$${lastOutRow}))`);
-        addCF(7, `AND(G2<>"",G2>AVERAGE($G$2:$G$${lastOutRow}))`);
-        addCF(8, `AND(H2<>"",H2>AVERAGE($H$2:$H$${lastOutRow}))`);
-
-        // Borders
-        const border = {
-          top: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-          left: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-          bottom: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-          right: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-        };
-
-        for (let r = 1; r <= lastOutRow; r++) {
-          const row = outWs.getRow(r);
-          row.eachCell({ includeEmpty: false }, (cell) => { cell.border = border; });
-        }
-
-        log('Готово. Собираю файл…');
-
-        const outBuf = await outWb.xlsx.writeBuffer();
-        saveAs(new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), outName);
-
-        log('Скачивание началось: ' + outName);
-      } catch (err) {
-        console.error(err);
-        log('Ошибка: ' + (err && err.message ? err.message : String(err)));
-        alert(err && err.message ? err.message : String(err));
-      } finally {
-        showOverlay(false);
-      }
-    });
-
-    function showOverlay(on) {
-      $overlay.style.display = on ? 'flex' : 'none';
-      $run.disabled = on || !$file.files || !$file.files[0];
-      $file.disabled = !!on;
-    }
-
-    function log(msg) {
-      $log.textContent += (msg + '\n');
-    }
-  </script>
 </body>
 </html>
