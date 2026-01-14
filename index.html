@@ -75,7 +75,7 @@
   <script>
     // Author: mirthfulnik
     // Fix 2026-01-14: устранён сдвиг данных на 1 колонку (ExcelJS addRow с массивом использует 0-based)
-    // Update 2026-01-14: условное форматирование — только полупрозрачная зелёная заливка, без перекраски текста
+    // Update 2026-01-14: условное форматирование — только мягкая (имитация полупрозрачности) зелёная заливка, без перекраски текста
 
     const $file = document.getElementById('file');
     const $run  = document.getElementById('run');
@@ -282,7 +282,7 @@
         outWs.getColumn(2).numFmt = '#,##0';    // Reached
 
         // Conditional formatting (soft green fill only; no font recolor)
-        const fillGreenSoft = { type: 'pattern', pattern: 'solid', fgColor: { argb: '80C6EFCE' } };
+        const fillGreenSoft = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
 
         function addCF(colIndex, ruleFormula) {
           const colLetter = colToLetter(colIndex);
