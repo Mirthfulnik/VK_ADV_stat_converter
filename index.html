@@ -44,7 +44,7 @@
     <div class="card">
       <h1>Обработчик Excel из ВК Рекламы (уровень групп)</h1>
       <p>
-        Загрузи выгрузку <code>.xlsx</code> → получи файл с колонками CPM / CR1 / CR2 + плановыми полями и зелёной мягкой подсветкой.
+        Загрузи выгрузку <code>.xlsx</code> → получи файл с колонками CPM / CR1 / CR2 + плановыми полями и зелёным условным форматированием.
       </p>
 
       <div class="row">
@@ -75,7 +75,6 @@
   <script>
     // Author: mirthfulnik
     // Fix 2026-01-14: устранён сдвиг данных на 1 колонку (ExcelJS addRow с массивом использует 0-based)
-    // Update 2026-01-14: условное форматирование — только мягкая (имитация полупрозрачности) зелёная заливка, без перекраски текста
 
     const $file = document.getElementById('file');
     const $run  = document.getElementById('run');
@@ -221,7 +220,7 @@
 
           // Copy original values shifted right by newOffset columns
           for (let c = 1; c <= srcHeaders.length; c++) {
-            outRowVals[newOffset + (c - 1)] = inRow.getCell(c).value; // 0-based index
+            outRowVals[(newOffset) + (c - 1)] = inRow.getCell(c).value; // 0-based index
           }
 
           const outRow = outWs.addRow(outRowVals);
@@ -260,6 +259,7 @@
             formula: `IF(OR(${audAddr}="",${reachAddr}=""),"",${audAddr}/2-${reachAddr})`
           };
 
+          // Budget must remain editable (no sheet protection is applied)
           outWs.getCell(budAddr).value = {
             formula: `IF(OR(${potAddr}="",${cpmAddr}=""),"",${potAddr}/1000*${cpmAddr})`
           };
@@ -272,17 +272,18 @@
         const lastOutRow = outWs.lastRow ? outWs.lastRow.number : 2;
 
         // Formats
-        outWs.getColumn(6).numFmt = '0.00';     // CPM
-        outWs.getColumn(7).numFmt = '0.00%';    // CR1
-        outWs.getColumn(8).numFmt = '0.00%';    // CR2
-        outWs.getColumn(4).numFmt = '#,##0.00'; // Budget
-        outWs.getColumn(5).numFmt = '#,##0';    // Forecast adds
-        outWs.getColumn(3).numFmt = '#,##0';    // Potential reach
-        outWs.getColumn(1).numFmt = '#,##0';    // Audience
-        outWs.getColumn(2).numFmt = '#,##0';    // Reached
+        outWs.getColumn(6).numFmt = '0.00';    // CPM
+        outWs.getColumn(7).numFmt = '0.00%';   // CR1
+        outWs.getColumn(8).numFmt = '0.00%';   // CR2
+        outWs.getColumn(4).numFmt = '#,##0.00';// Budget
+        outWs.getColumn(5).numFmt = '#,##0';   // Forecast adds
+        outWs.getColumn(3).numFmt = '#,##0';   // Potential reach
+        outWs.getColumn(1).numFmt = '#,##0';   // Audience
+        outWs.getColumn(2).numFmt = '#,##0';   // Reached
 
-        // Conditional formatting (soft green fill only; no font recolor)
-        const fillGreenSoft = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+        // Conditional formatting (green)
+        const fillGreen = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+        const fontGreen = { color: { argb: 'FF006100' } };
 
         function addCF(colIndex, ruleFormula) {
           const colLetter = colToLetter(colIndex);
@@ -292,7 +293,7 @@
             rules: [{
               type: 'expression',
               formulae: [ruleFormula],
-              style: { fill: fillGreenSoft }
+              style: { fill: fillGreen, font: fontGreen }
             }]
           });
         }
