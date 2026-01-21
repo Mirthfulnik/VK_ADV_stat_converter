@@ -232,11 +232,47 @@
         const lastInRow = Math.max(2, inWs.actualRowCount || inWs.rowCount || 2);
         log('Копирую строки и проставляю формулы…');
 
+        // Collect rows first to allow ranking (CR1 desc, then CR2 desc)
+        const rowsToWrite = [];
         for (let r = 2; r <= lastInRow; r++) {
           const inRow = inWs.getRow(r);
           const values = inRow.values || [];
           const hasAny = values.some((v, idx) => idx > 0 && v !== null && v !== undefined && v !== '');
           if (!hasAny) continue;
+
+          // Pull raw numbers for ranking
+          const spentV = Number(inRow.getCell(spentCol).value || 0);
+          const imprV  = Number(inRow.getCell(imprCol).value  || 0);
+          const startV = Number(inRow.getCell(startCol).value || 0);
+          const addV   = Number(inRow.getCell(addCol).value   || 0);
+
+          // Rank keys with protection; blanks sort to bottom
+          let kCR1 = null;
+          let kCR2 = null;
+
+          if (imprV > 0 && startV > 0) kCR1 = startV / imprV;
+          else if (imprV > 0 && startV === 0) kCR1 = 0;
+
+          if (startV > 0 && addV > 0) kCR2 = addV / startV;
+          else if (startV > 0 && addV === 0) kCR2 = 0;
+
+          rowsToWrite.push({ r, kCR1, kCR2 });
+        }
+
+        rowsToWrite.sort((a, b) => {
+          const a1 = (a.kCR1 === null || a.kCR1 === undefined) ? -1 : a.kCR1;
+          const b1 = (b.kCR1 === null || b.kCR1 === undefined) ? -1 : b.kCR1;
+          if (b1 !== a1) return b1 - a1;
+
+          const a2 = (a.kCR2 === null || a.kCR2 === undefined) ? -1 : a.kCR2;
+          const b2 = (b.kCR2 === null || b.kCR2 === undefined) ? -1 : b.kCR2;
+          return b2 - a2;
+        });
+
+        // Write rows in ranked order
+        for (const item of rowsToWrite) {
+          const r = item.r;
+          const inRow = inWs.getRow(r);
 
           // Output row values (0-based array for addRow)
           const outRowVals = new Array(outHeaders.length).fill(null);
@@ -247,8 +283,8 @@
             outRowVals[destCol - 1] = inRow.getCell(c).value;
           }
 
-          // Default launch flag = "False"
-          outRowVals[outLaunchCol - 1] = 'False';
+          // Default launch checkbox = 0 (unchecked)
+          outRowVals[outLaunchCol - 1] = 0; // checkbox (0/1)
 
           const outRow = outGroups.addRow(outRowVals);
           const outR = outRow.number;
@@ -300,18 +336,19 @@
           // Forecast bid = budget / forecast adds
           outGroups.getCell(fBid).value = { formula: `IF(OR(${budAddr}="",${fAdds}="",${fAdds}=0),"",${budAddr}/${fAdds})` };
 
-          // Data validation for launch flag (dropdown True/False)
+          // Data validation for launch checkbox (0/1)
           const launchCell = outGroups.getCell(outLaunchCol, outR);
-          launchCell.dataValidation = {
-            type: 'list',
-            allowBlank: true,
-            formulae: ['"True,False"']
-          };
+          launchCell.dataValidation = { type: 'list', allowBlank: true, formulae: ['"1,0"'] };
         }
+       }
 
         const lastOutRow = outGroups.lastRow ? outGroups.lastRow.number : 2;
 
         // Formats
+        // Checkbox-style column (0/1 shown as ☑/☐)
+        outGroups.getColumn(outLaunchCol).numFmt = '[=1]"☑";[=0]"☐";""';
+        outGroups.getColumn(outLaunchCol).alignment = { vertical: 'middle', horizontal: 'center' };
+
         outGroups.getColumn(8).numFmt  = '0.00';   // CPM (H)
         outGroups.getColumn(9).numFmt  = '0.00%';  // CR1 (I)
         outGroups.getColumn(10).numFmt = '0.00%';  // CR2 (J)
@@ -372,7 +409,7 @@
         const launchRange = `'${gName}'!$${launchColLetter}$2:$${launchColLetter}$${lastOutRow}`;
 
         const sumIf = (sumColLetter) =>
-          `SUMIF(${launchRange},"True",'${gName}'!$${sumColLetter}$2:$${sumColLetter}$${lastOutRow})`;
+          `SUMIF(${launchRange},1,'${gName}'!$${sumColLetter}$2:$${sumColLetter}$${lastOutRow})`;
 
         // Rows
         const metrics = [
