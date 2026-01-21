@@ -256,7 +256,17 @@
         for (let r = 2; r <= lastInRow; r++) {
           const inRow = inWs.getRow(r);
           const values = inRow.values || [];
-          const hasAny = values.some((v, idx) => idx > 0 && v !== null && v !== undefined && v !== '');
+          const isMeaningful = (v) => {
+            if (v === null || v === undefined) return false;
+            if (typeof v === 'object') {
+              if (v && 'result' in v) v = v.result;
+              else if (v && 'text' in v) v = v.text;
+              else return true;
+            }
+            const s = String(v).replace(/\u00A0/g, ' ').trim(); // NBSP -> space
+            return s !== '';
+          };
+          const hasAny = values.some((v, idx) => idx > 0 && isMeaningful(v));
           if (!hasAny) continue;
 
           // Pull raw numbers for ranking
@@ -410,9 +420,19 @@ if (outCpaCol) {
 } else {
   log('Колонка "Цена за добавление аудио, ₽" не найдена — условное форматирование для неё пропущено.');
 }
+        // Borders + basic row styling (только в пределах фактических строк)
+        const border = {
+          top:    { style: 'thin', color: { argb: '33FFFFFF' } },
+          left:   { style: 'thin', color: { argb: '33FFFFFF' } },
+          bottom: { style: 'thin', color: { argb: '33FFFFFF' } },
+          right:  { style: 'thin', color: { argb: '33FFFFFF' } }
+        };
 
-          row.eachCell({ includeEmpty: false }, (cell) => { cell.border = border; });
+        for (let rr = 1; rr <= lastOutRow; rr++) {
+          const row = outGroups.getRow(rr);
+          row.eachCell({ includeEmpty: true }, (cell) => { cell.border = border; });
         }
+
 
         // ---- Sheet 2: "Прогноз" ----
         log('Создаю лист "Прогноз"…');
