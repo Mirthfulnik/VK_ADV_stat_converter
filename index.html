@@ -165,6 +165,15 @@
         outWb.creator = 'mirthfulnik';
         outWb.created = new Date();
 
+        // Hidden list sheet for checkbox dropdown (shows ☑/☐ but stores 0/1)
+        const outLists = outWb.addWorksheet('__lists');
+        try { outLists.state = 'veryHidden'; } catch (e) { try { outLists.state = 'hidden'; } catch(e2){} }
+        outLists.getCell('A1').value = 0;
+        outLists.getCell('A2').value = 1;
+        outLists.getColumn(1).width = 6;
+        outLists.getColumn(1).numFmt = '[=1]"☑";[=0]"☐";""';
+        outLists.getColumn(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
         const outGroups = outWb.addWorksheet('Группы', { views: [{ state: 'frozen', ySplit: 1 }] });
 
         // Planning columns (left block)
@@ -338,9 +347,7 @@
 
           // Data validation for launch checkbox (0/1)
           const launchCell = outGroups.getCell(outLaunchCol, outR);
-          launchCell.dataValidation = { type: 'list', allowBlank: true, formulae: ['"1,0"'] };
-        }
-       }
+          launchCell.dataValidation = { type: 'list', allowBlank: true, formulae: ["'__lists'!$A$1:$A$2"] };
 
         const lastOutRow = outGroups.lastRow ? outGroups.lastRow.number : 2;
 
