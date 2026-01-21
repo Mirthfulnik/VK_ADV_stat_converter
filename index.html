@@ -44,7 +44,7 @@
     <div class="card">
       <h1>Обработчик Excel из ВК Рекламы (уровень групп)</h1>
       <p>
-        Загрузи выгрузку <code>.xlsx</code> → получи файл с колонками CPM / CR1 / CR2 + плановыми полями и зелёным условным форматированием.
+        Загрузи выгрузку <code>.xlsx</code> → получи файл с метриками (CPM/CR1/CR2), прогнозом (прослушивания/добавления/ставки) и листом «Прогноз».
       </p>
 
       <div class="row">
@@ -53,7 +53,7 @@
       </div>
 
       <div class="hint">
-        Ожидается лист <code>Группы</code> и колонки: «Потрачено всего, ₽», «Показы», «Начали прослушивание», «Добавили аудио».
+        Ожидается лист <code>Группы</code> и колонки: «Потрачено всего, ₽», «Показы», «Начали прослушивание», «Добавили аудио», «Название группы».
       </div>
 
       <div id="log" class="log"></div>
@@ -74,7 +74,8 @@
 
   <script>
     // Author: mirthfulnik
-    // Fix 2026-01-14: устранён сдвиг данных на 1 колонку (ExcelJS addRow с массивом использует 0-based)
+    // Update 2026-01-21: Показы(факт) как формула-ссылка; Потенциальный охват = Аудитория/2 - Показы(факт);
+    // добавлены Прогноз прослушиваний/добавлений/ставок, столбец Запуск с dropdown и лист "Прогноз".
 
     const $file = document.getElementById('file');
     const $run  = document.getElementById('run');
@@ -116,11 +117,11 @@
         // Normalize helper
         const norm = (s) => String(s ?? '')
           .trim()
-          .replace(/\s+/g, ' ')
+          .replace(/\\s+/g, ' ')
           .toLowerCase()
           .replace(/ё/g, 'е');
 
-        // Build header map: normalizedHeader -> index (1-based)
+        // Map normalizedHeader -> 1-based index
         const map = new Map();
         srcHeaders.forEach((h, idx) => map.set(norm(h), idx + 1));
 
@@ -129,6 +130,7 @@
           impr:  'показы',
           start: 'начали прослушивание',
           add:   'добавили аудио',
+          group: 'название группы'
         };
 
         const spentCol = map.get(need.spent);
@@ -136,56 +138,72 @@
         const startCol = map.get(need.start);
         const addCol   = map.get(need.add);
 
+        // "Название группы" иногда может быть с пробелами — ищем по includes
+        let groupNameCol = map.get(need.group);
+        if (!groupNameCol) {
+          for (const [k, v] of map.entries()) {
+            if (k.includes('название группы')) { groupNameCol = v; break; }
+          }
+        }
+
         const missing = [];
         if (!spentCol) missing.push('«Потрачено всего, ₽»');
         if (!imprCol)  missing.push('«Показы»');
         if (!startCol) missing.push('«Начали прослушивание»');
         if (!addCol)   missing.push('«Добавили аудио»');
+        if (!groupNameCol) missing.push('«Название группы»');
 
         if (missing.length) {
           throw new Error('Не найдены обязательные колонки: ' + missing.join(', ') +
-            '.\nПроверь, что это выгрузка ВК на уровне групп и что заголовки в первой строке.');
+            '.\\nПроверь, что это выгрузка ВК на уровне групп и что заголовки в первой строке.');
         }
 
-        log('Колонки найдены: spent=' + spentCol + ', impr=' + imprCol + ', start=' + startCol + ', add=' + addCol);
+        log(`Колонки найдены: spent=${spentCol}, impr=${imprCol}, start=${startCol}, add=${addCol}, group=${groupNameCol}`);
 
         // Create output workbook
         const outWb = new ExcelJS.Workbook();
         outWb.creator = 'mirthfulnik';
         outWb.created = new Date();
 
-        const outWs = outWb.addWorksheet(inWs.name || 'Группы', {
-          views: [{ state: 'frozen', ySplit: 1 }]
-        });
+        const outGroups = outWb.addWorksheet('Группы', { views: [{ state: 'frozen', ySplit: 1 }] });
 
-        // New columns that will be inserted before original VK columns
-        const NEW_HEADERS = [
-          'Аудитория',
-          'Охвачено',
-          'Потенциальный охват',
-          'Бюджет',
-          'Прогноз добавлений',
-          'CPM',
-          'CR1',
-          'CR2'
+        // Planning columns (left block)
+        const PLAN_HEADERS = [
+          'Аудитория',              // A (manual)
+          'Показы (факт)',          // B (formula link to VK "Показы")
+          'Потенциальный охват',    // C = A/2 - B
+          'Бюджет',                 // D = C/1000 * CPM
+          'Прогноз прослушиваний',  // E = C * CR1
+          'Прогноз добавлений',     // F = C * CR1 * CR2
+          'Прогноз ставок',         // G = D / F
+          'CPM',                    // H
+          'CR1',                    // I
+          'CR2'                     // J
         ];
 
-        const outHeaders = NEW_HEADERS.concat(srcHeaders.map(h => (h ?? '')));
+        // Insert "Запуск" before "Название группы" within original columns
+        const originalHeaders = srcHeaders.map(h => (h ?? ''));
+        const originalWithLaunch = [];
+        for (let i = 1; i <= originalHeaders.length; i++) {
+          if (i === groupNameCol) originalWithLaunch.push('Запуск');
+          originalWithLaunch.push(originalHeaders[i-1]);
+        }
 
-        outWs.addRow(outHeaders);
+        const outHeaders = PLAN_HEADERS.concat(originalWithLaunch);
+        outGroups.addRow(outHeaders);
 
-        // Style header
-        const hdr = outWs.getRow(1);
+        // Header style
+        const hdr = outGroups.getRow(1);
         hdr.font = { bold: true };
         hdr.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
         hdr.height = 22;
 
-        // Column widths (simple defaults)
-        const widths = [18, 12, 20, 14, 18, 10, 10, 10];
-        for (let i = 1; i <= NEW_HEADERS.length; i++) outWs.getColumn(i).width = widths[i-1] || 14;
-        for (let i = NEW_HEADERS.length + 1; i <= outHeaders.length; i++) outWs.getColumn(i).width = 18;
+        // Widths
+        const planWidths = [18, 14, 20, 14, 20, 18, 14, 10, 10, 10];
+        for (let i = 1; i <= PLAN_HEADERS.length; i++) outGroups.getColumn(i).width = planWidths[i-1] || 14;
+        for (let i = PLAN_HEADERS.length + 1; i <= outHeaders.length; i++) outGroups.getColumn(i).width = 18;
 
-        // Helpers: col index -> Excel letter (1-based)
+        // Helper col->letter (1-based)
         function colToLetter(col) {
           let temp = col, letter = '';
           while (temp > 0) {
@@ -196,131 +214,215 @@
           return letter;
         }
 
-        const newOffset = NEW_HEADERS.length; // number of inserted columns (8)
+        const planOffset = PLAN_HEADERS.length; // 10
 
-        const outSpentCol = newOffset + spentCol;
-        const outImprCol  = newOffset + imprCol;
-        const outStartCol = newOffset + startCol;
-        const outAddCol   = newOffset + addCol;
+        // Where original VK column lands in output (after inserting "Запуск")
+        function outColForOriginal(originalIndex1Based) {
+          const extra = (originalIndex1Based >= groupNameCol) ? 1 : 0;
+          return planOffset + originalIndex1Based + extra;
+        }
+
+        const outSpentCol = outColForOriginal(spentCol);
+        const outImprCol  = outColForOriginal(imprCol);
+        const outStartCol = outColForOriginal(startCol);
+        const outAddCol   = outColForOriginal(addCol);
+
+        const outLaunchCol = planOffset + groupNameCol; // inserted "Запуск" column position (1-based)
 
         const lastInRow = Math.max(2, inWs.actualRowCount || inWs.rowCount || 2);
-
         log('Копирую строки и проставляю формулы…');
 
         for (let r = 2; r <= lastInRow; r++) {
           const inRow = inWs.getRow(r);
-
-          // Stop if row is fully empty
           const values = inRow.values || [];
           const hasAny = values.some((v, idx) => idx > 0 && v !== null && v !== undefined && v !== '');
           if (!hasAny) continue;
 
-          // IMPORTANT: ExcelJS addRow(array) is 0-based: array[0] -> column 1
+          // Output row values (0-based array for addRow)
           const outRowVals = new Array(outHeaders.length).fill(null);
 
-          // Copy original values shifted right by newOffset columns
-          for (let c = 1; c <= srcHeaders.length; c++) {
-            outRowVals[(newOffset) + (c - 1)] = inRow.getCell(c).value; // 0-based index
+          // Copy original values
+          for (let c = 1; c <= originalHeaders.length; c++) {
+            const destCol = outColForOriginal(c); // 1-based
+            outRowVals[destCol - 1] = inRow.getCell(c).value;
           }
 
-          const outRow = outWs.addRow(outRowVals);
+          // Default launch flag = "False"
+          outRowVals[outLaunchCol - 1] = 'False';
+
+          const outRow = outGroups.addRow(outRowVals);
           const outR = outRow.number;
 
-          const spentAddr = `${colToLetter(outSpentCol)}${outR}`;
-          const imprAddr  = `${colToLetter(outImprCol)}${outR}`;
-          const startAddr = `${colToLetter(outStartCol)}${outR}`;
-          const addAddr   = `${colToLetter(outAddCol)}${outR}`;
+          // Addresses
+          const audAddr    = `A${outR}`;
+          const imprFact   = `B${outR}`;
+          const potAddr    = `C${outR}`;
+          const budAddr    = `D${outR}`;
+          const fListen    = `E${outR}`;
+          const fAdds      = `F${outR}`;
+          const fBid       = `G${outR}`;
+          const cpmAddr    = `H${outR}`;
+          const cr1Addr    = `I${outR}`;
+          const cr2Addr    = `J${outR}`;
 
-          const audAddr   = `A${outR}`;
-          const reachAddr = `B${outR}`;
-          const potAddr   = `C${outR}`;
-          const budAddr   = `D${outR}`;
-          const foreAddr  = `E${outR}`;
-          const cpmAddr   = `F${outR}`;
-          const cr1Addr   = `G${outR}`;
-          const cr2Addr   = `H${outR}`;
+          const spentAddr  = `${colToLetter(outSpentCol)}${outR}`;
+          const imprAddr   = `${colToLetter(outImprCol)}${outR}`;
+          const startAddr  = `${colToLetter(outStartCol)}${outR}`;
+          const addAddr    = `${colToLetter(outAddCol)}${outR}`;
 
-          // Rule: if Start=0 AND Add=0 => blank
-          const blankIfBothZero = `AND(${startAddr}=0,${addAddr}=0)`;
+          // Protections: return "" on empty/0 denominators
+          const safeDiv = (num, den) => `IF(OR(${den}="",${den}=0),"",${num}/${den})`;
 
-          outWs.getCell(cpmAddr).value = {
-            formula: `IF(${blankIfBothZero},"",IFERROR(${spentAddr}/${imprAddr}*1000,""))`
-          };
+          // Показы (факт) = ссылка на оригинальные "Показы"
+          outGroups.getCell(imprFact).value = { formula: `IF(${imprAddr}="","",${imprAddr})` };
 
-          outWs.getCell(cr1Addr).value = {
-            formula: `IF(${blankIfBothZero},"",IFERROR(${startAddr}/${imprAddr},""))`
-          };
+          // CPM = spent / impressions * 1000
+          outGroups.getCell(cpmAddr).value = { formula: `IF(OR(${imprAddr}="",${imprAddr}=0),"",IFERROR(${spentAddr}/${imprAddr}*1000,""))` };
 
-          outWs.getCell(cr2Addr).value = {
-            formula: `IF(${blankIfBothZero},"",IFERROR(${addAddr}/${startAddr},""))`
-          };
+          // CR1 = start / impressions
+          outGroups.getCell(cr1Addr).value = { formula: `IFERROR(${safeDiv(startAddr, imprAddr)},"")` };
 
-          outWs.getCell(potAddr).value = {
-            formula: `IF(OR(${audAddr}="",${reachAddr}=""),"",${audAddr}/2-${reachAddr})`
-          };
+          // CR2 = add / start
+          outGroups.getCell(cr2Addr).value = { formula: `IFERROR(${safeDiv(addAddr, startAddr)},"")` };
 
-          // Budget must remain editable (no sheet protection is applied)
-          outWs.getCell(budAddr).value = {
-            formula: `IF(OR(${potAddr}="",${cpmAddr}=""),"",${potAddr}/1000*${cpmAddr})`
-          };
+          // Potential reach = audience/2 - shows_fact
+          outGroups.getCell(potAddr).value = { formula: `IF(OR(${audAddr}="",${imprFact}=""),"",${audAddr}/2-${imprFact})` };
 
-          outWs.getCell(foreAddr).value = {
-            formula: `IF(OR(${potAddr}="",${cr1Addr}="",${cr2Addr}=""),"",${potAddr}*${cr1Addr}*${cr2Addr})`
+          // Budget = potential/1000 * CPM
+          outGroups.getCell(budAddr).value = { formula: `IF(OR(${potAddr}="",${cpmAddr}=""),"",${potAddr}/1000*${cpmAddr})` };
+
+          // Forecast listens = potential * CR1
+          outGroups.getCell(fListen).value = { formula: `IF(OR(${potAddr}="",${cr1Addr}=""),"",${potAddr}*${cr1Addr})` };
+
+          // Forecast adds = potential * CR1 * CR2
+          outGroups.getCell(fAdds).value = { formula: `IF(OR(${potAddr}="",${cr1Addr}="",${cr2Addr}=""),"",${potAddr}*${cr1Addr}*${cr2Addr})` };
+
+          // Forecast bid = budget / forecast adds
+          outGroups.getCell(fBid).value = { formula: `IF(OR(${budAddr}="",${fAdds}="",${fAdds}=0),"",${budAddr}/${fAdds})` };
+
+          // Data validation for launch flag (dropdown True/False)
+          const launchCell = outGroups.getCell(outLaunchCol, outR);
+          launchCell.dataValidation = {
+            type: 'list',
+            allowBlank: true,
+            formulae: ['"True,False"']
           };
         }
 
-        const lastOutRow = outWs.lastRow ? outWs.lastRow.number : 2;
+        const lastOutRow = outGroups.lastRow ? outGroups.lastRow.number : 2;
 
         // Formats
-        outWs.getColumn(6).numFmt = '0.00';    // CPM
-        outWs.getColumn(7).numFmt = '0.00%';   // CR1
-        outWs.getColumn(8).numFmt = '0.00%';   // CR2
-        outWs.getColumn(4).numFmt = '#,##0.00';// Budget
-        outWs.getColumn(5).numFmt = '#,##0';   // Forecast adds
-        outWs.getColumn(3).numFmt = '#,##0';   // Potential reach
-        outWs.getColumn(1).numFmt = '#,##0';   // Audience
-        outWs.getColumn(2).numFmt = '#,##0';   // Reached
+        outGroups.getColumn(8).numFmt  = '0.00';   // CPM (H)
+        outGroups.getColumn(9).numFmt  = '0.00%';  // CR1 (I)
+        outGroups.getColumn(10).numFmt = '0.00%';  // CR2 (J)
+        outGroups.getColumn(4).numFmt  = '#,##0.00'; // Budget
+        outGroups.getColumn(5).numFmt  = '#,##0';    // Forecast listens
+        outGroups.getColumn(6).numFmt  = '#,##0';    // Forecast adds
+        outGroups.getColumn(7).numFmt  = '#,##0.00'; // Forecast bid
+        outGroups.getColumn(3).numFmt  = '#,##0';    // Potential
+        outGroups.getColumn(2).numFmt  = '#,##0';    // Shows fact
+        outGroups.getColumn(1).numFmt  = '#,##0';    // Audience
 
-        // Conditional formatting (green)
-        const fillGreen = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
-        const fontGreen = { color: { argb: 'FF006100' } };
+        // Conditional formatting (Excel default light green fill), only fill
+        const fillExcelGreen = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
 
         function addCF(colIndex, ruleFormula) {
           const colLetter = colToLetter(colIndex);
           const ref = `${colLetter}2:${colLetter}${lastOutRow}`;
-          outWs.addConditionalFormatting({
+          outGroups.addConditionalFormatting({
             ref,
             rules: [{
               type: 'expression',
               formulae: [ruleFormula],
-              style: { fill: fillGreen, font: fontGreen }
+              style: { fill: fillExcelGreen }
             }]
           });
         }
 
-        addCF(6, `AND(F2<>"",F2<AVERAGE($F$2:$F$${lastOutRow}))`);
-        addCF(7, `AND(G2<>"",G2>AVERAGE($G$2:$G$${lastOutRow}))`);
-        addCF(8, `AND(H2<>"",H2>AVERAGE($H$2:$H$${lastOutRow}))`);
+        addCF(8,  `AND(H2<>"",H2<AVERAGE($H$2:$H$${lastOutRow}))`);     // CPM
+        addCF(9,  `AND(I2<>"",I2>AVERAGE($I$2:$I$${lastOutRow}))`);     // CR1
+        addCF(10, `AND(J2<>"",J2>AVERAGE($J$2:$J$${lastOutRow}))`);     // CR2
 
-        // Borders
+        // Borders (light)
         const border = {
           top: { style: 'thin', color: { argb: 'FF2A2A3A' } },
           left: { style: 'thin', color: { argb: 'FF2A2A3A' } },
           bottom: { style: 'thin', color: { argb: 'FF2A2A3A' } },
           right: { style: 'thin', color: { argb: 'FF2A2A3A' } },
         };
-
         for (let r = 1; r <= lastOutRow; r++) {
-          const row = outWs.getRow(r);
+          const row = outGroups.getRow(r);
           row.eachCell({ includeEmpty: false }, (cell) => { cell.border = border; });
         }
 
+        // ---- Sheet 2: "Прогноз" ----
+        log('Создаю лист "Прогноз"…');
+        const outForecast = outWb.addWorksheet('Прогноз', { views: [{ state: 'frozen', ySplit: 1 }] });
+
+        outForecast.addRow(['Метрика', 'Значение']);
+        const hdr2 = outForecast.getRow(1);
+        hdr2.font = { bold: true };
+        hdr2.alignment = { vertical: 'middle', horizontal: 'center' };
+        outForecast.getColumn(1).width = 28;
+        outForecast.getColumn(2).width = 22;
+
+        // Ranges in "Группы"
+        const gName = 'Группы';
+        const launchColLetter = colToLetter(outLaunchCol);
+        const launchRange = `'${gName}'!$${launchColLetter}$2:$${launchColLetter}$${lastOutRow}`;
+
+        const sumIf = (sumColLetter) =>
+          `SUMIF(${launchRange},"True",'${gName}'!$${sumColLetter}$2:$${sumColLetter}$${lastOutRow})`;
+
+        // Rows
+        const metrics = [
+          ['Требуется бюджет',      sumIf('D')],
+          ['Потенциальный охват',   sumIf('C')],
+          ['Прогноз прослушиваний', sumIf('E')],
+          ['Прогноз добавлений',    sumIf('F')],
+          ['Прогноз ставок',        ''],
+          ['Прогноз CPM',           ''],
+          ['Прогноз CR1',           ''],
+          ['Прогноз CR2',           ''],
+        ];
+
+        for (const [label, formula] of metrics) {
+          const rr = outForecast.addRow([label, null]);
+          const rnum = rr.number;
+          if (formula) outForecast.getCell(`B${rnum}`).value = { formula: `IFERROR(${formula},"")` };
+        }
+
+        // References in forecast sheet
+        const BUD = 'B2', POT = 'B3', LIS = 'B4', ADS = 'B5';
+
+        outForecast.getCell('B6').value = { formula: `IF(OR(${ADS}="",${ADS}=0,${BUD}=""),"",${BUD}/${ADS})` };
+        outForecast.getCell('B7').value = { formula: `IF(OR(${POT}="",${POT}=0,${BUD}=""),"",${BUD}/${POT}*1000)` };
+        outForecast.getCell('B8').value = { formula: `IF(OR(${POT}="",${POT}=0,${LIS}=""),"",${LIS}/${POT})` };
+        outForecast.getCell('B9').value = { formula: `IF(OR(${LIS}="",${LIS}=0,${ADS}=""),"",${ADS}/${LIS})` };
+
+        // Formats on forecast sheet
+        outForecast.getCell('B2').numFmt = '#,##0.00';
+        outForecast.getCell('B3').numFmt = '#,##0';
+        outForecast.getCell('B4').numFmt = '#,##0';
+        outForecast.getCell('B5').numFmt = '#,##0';
+        outForecast.getCell('B6').numFmt = '#,##0.00';
+        outForecast.getCell('B7').numFmt = '0.00';
+        outForecast.getCell('B8').numFmt = '0.00%';
+        outForecast.getCell('B9').numFmt = '0.00%';
+
+        // Borders on forecast
+        for (let r = 1; r <= 9; r++) {
+          outForecast.getRow(r).eachCell({ includeEmpty: true }, (cell) => { cell.border = border; });
+        }
+
         log('Готово. Собираю файл…');
-
         const outBuf = await outWb.xlsx.writeBuffer();
-        saveAs(new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), outName);
-
+        saveAs(
+          new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          outName
+        );
         log('Скачивание началось: ' + outName);
+
       } catch (err) {
         console.error(err);
         log('Ошибка: ' + (err && err.message ? err.message : String(err)));
@@ -335,10 +437,7 @@
       $run.disabled = on || !$file.files || !$file.files[0];
       $file.disabled = !!on;
     }
-
-    function log(msg) {
-      $log.textContent += (msg + '\n');
-    }
+    function log(msg) { $log.textContent += (msg + '\\n'); }
   </script>
 </body>
 </html>
