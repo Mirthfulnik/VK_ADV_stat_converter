@@ -349,6 +349,9 @@
           const launchCell = outGroups.getCell(outLaunchCol, outR);
           launchCell.dataValidation = { type: 'list', allowBlank: true, formulae: ["'__lists'!$A$1:$A$2"] };
 
+
+        }
+
         const lastOutRow = outGroups.lastRow ? outGroups.lastRow.number : 2;
 
         // Formats
