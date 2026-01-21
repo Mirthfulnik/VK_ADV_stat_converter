@@ -53,7 +53,7 @@
       </div>
 
       <div class="hint">
-        Ожидается лист <code>Группы</code> и колонки: «Потрачено всего, ₽», «Показы», «Начали прослушивание», «Добавили аудио», «Название группы».
+        Ожидается лист <code>Группы</code> и колонки: «Потрачено всего, ₽», «Показы», «Начали прослушивание», «Добавили аудио», «Название группы». Опционально: «Цена за добавление аудио, ₽» (для подсветки).
       </div>
 
       <div id="log" class="log"></div>
@@ -130,7 +130,8 @@
           impr:  'показы',
           start: 'начали прослушивание',
           add:   'добавили аудио',
-          group: 'название группы'
+          group: 'название группы',
+          cpa:   'цена за добавление аудио, ₽'
         };
 
         const spentCol = map.get(need.spent);
@@ -146,6 +147,14 @@
           }
         }
 
+        // "Цена за добавление аудио, ₽" — может отличаться в названии, ищем по includes
+        let cpaCol = map.get(need.cpa);
+        if (!cpaCol) {
+          for (const [k, v] of map.entries()) {
+            if (k.includes('цена за добавление') && k.includes('аудио')) { cpaCol = v; break; }
+          }
+        }
+
         const missing = [];
         if (!spentCol) missing.push('«Потрачено всего, ₽»');
         if (!imprCol)  missing.push('«Показы»');
@@ -158,7 +167,7 @@
             '.\\nПроверь, что это выгрузка ВК на уровне групп и что заголовки в первой строке.');
         }
 
-        log(`Колонки найдены: spent=${spentCol}, impr=${imprCol}, start=${startCol}, add=${addCol}, group=${groupNameCol}`);
+        log(`Колонки найдены: spent=${spentCol}, impr=${imprCol}, start=${startCol}, add=${addCol}, group=${groupNameCol}` + (cpaCol ? `, cpa=${cpaCol}` : ', cpa=— (не найдено)'));
 
         // Create output workbook
         const outWb = new ExcelJS.Workbook();
@@ -235,10 +244,11 @@
         const outImprCol  = outColForOriginal(imprCol);
         const outStartCol = outColForOriginal(startCol);
         const outAddCol   = outColForOriginal(addCol);
+        const outCpaCol   = cpaCol ? outColForOriginal(cpaCol) : null;
 
         const outLaunchCol = planOffset + groupNameCol; // inserted "Запуск" column position (1-based)
 
-        const lastInRow = Math.max(2, inWs.actualRowCount || inWs.rowCount || 2);
+        const lastInRow = Math.max(2, inWs.rowCount || 2);
         log('Копирую строки и проставляю формулы…');
 
         // Collect rows first to allow ranking (CR1 desc, then CR2 desc)
@@ -362,6 +372,7 @@
         outGroups.getColumn(8).numFmt  = '0.00';   // CPM (H)
         outGroups.getColumn(9).numFmt  = '0.00%';  // CR1 (I)
         outGroups.getColumn(10).numFmt = '0.00%';  // CR2 (J)
+        if (outCpaCol) outGroups.getColumn(outCpaCol).numFmt = '0.00'; // Цена за добавление аудио, ₽
         outGroups.getColumn(4).numFmt  = '#,##0.00'; // Budget
         outGroups.getColumn(5).numFmt  = '#,##0';    // Forecast listens
         outGroups.getColumn(6).numFmt  = '#,##0';    // Forecast adds
@@ -370,35 +381,36 @@
         outGroups.getColumn(2).numFmt  = '#,##0';    // Shows fact
         outGroups.getColumn(1).numFmt  = '#,##0';    // Audience
 
-        // Conditional formatting (Excel default light green fill), only fill
-        const fillExcelGreen = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+        // Conditional formatting: красный ТЕКСТ (без заливки)
+// CPM: красный, если меньше среднего по столбцу
+// CR1/CR2: красный, если больше среднего по столбцу
+// Цена за добавление аудио, ₽: красный, если меньше среднего по столбцу (если колонка найдена)
 
-        function addCF(colIndex, ruleFormula) {
-          const colLetter = colToLetter(colIndex);
-          const ref = `${colLetter}2:${colLetter}${lastOutRow}`;
-          outGroups.addConditionalFormatting({
-            ref,
-            rules: [{
-              type: 'expression',
-              formulae: [ruleFormula],
-              style: { fill: fillExcelGreen }
-            }]
-          });
-        }
+const fontRed = { color: { argb: 'FFFF2D2D' } }; // заметный красный
+function addCFText(colIndex, ruleFormula) {
+  const colLetter = colToLetter(colIndex);
+  const ref = `${colLetter}2:${colLetter}${lastOutRow}`;
+  outGroups.addConditionalFormatting({
+    ref,
+    rules: [{
+      type: 'expression',
+      formulae: [ruleFormula],
+      style: { font: fontRed }
+    }]
+  });
+}
 
-        addCF(8,  `AND(H2<>"",H2<AVERAGE($H$2:$H$${lastOutRow}))`);     // CPM
-        addCF(9,  `AND(I2<>"",I2>AVERAGE($I$2:$I$${lastOutRow}))`);     // CR1
-        addCF(10, `AND(J2<>"",J2>AVERAGE($J$2:$J$${lastOutRow}))`);     // CR2
+addCFText(8,  `AND(H2<>"",H2<AVERAGE($H$2:$H$${lastOutRow}))`);     // CPM
+addCFText(9,  `AND(I2<>"",I2>AVERAGE($I$2:$I$${lastOutRow}))`);     // CR1
+addCFText(10, `AND(J2<>"",J2>AVERAGE($J$2:$J$${lastOutRow}))`);     // CR2
 
-        // Borders (light)
-        const border = {
-          top: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-          left: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-          bottom: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-          right: { style: 'thin', color: { argb: 'FF2A2A3A' } },
-        };
-        for (let r = 1; r <= lastOutRow; r++) {
-          const row = outGroups.getRow(r);
+if (outCpaCol) {
+  const cpaL = colToLetter(outCpaCol);
+  addCFText(outCpaCol, `AND(${cpaL}2<>"",${cpaL}2<AVERAGE($${cpaL}$2:$${cpaL}$${lastOutRow}))`);
+} else {
+  log('Колонка "Цена за добавление аудио, ₽" не найдена — условное форматирование для неё пропущено.');
+}
+
           row.eachCell({ includeEmpty: false }, (cell) => { cell.border = border; });
         }
 
