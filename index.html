@@ -130,10 +130,21 @@
     const $preview = document.getElementById('preview');
     const $toast = document.getElementById('toast');
 
-    $file.addEventListener('change', () => {
-      $run.disabled = !$file.files || !$file.files[0];
-      $preview.innerHTML = '';
-    });
+    $file.addEventListener('change', async () => {
+  $run.disabled = !$file.files || !$file.files[0];
+  $preview.innerHTML = '';
+
+  if (!$file.files || !$file.files[0]) return;
+
+  const buffer = await $file.files[0].arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+
+  const ws = wb.getWorksheet('Группы') || wb.worksheets[0];
+  if (!ws) return;
+
+  renderPreview(ws);
+});
 
     $run.addEventListener('click', async () => {
       if (!$file.files || !$file.files[0]) return;
@@ -151,8 +162,6 @@
 
         const inWs = inWb.getWorksheet('Группы') || inWb.worksheets[0];
         if (!inWs) throw new Error('Не найден ни один лист в книге.');
-
-                renderPreview(inWs);
         const headerRow = inWs.getRow(1);
 
         // Read headers (1-based cells)
