@@ -36,7 +36,34 @@
     .overlay p { margin-top: 10px; color: var(--muted); }
     .small { font-size: 12px; color: var(--muted); margin-top: 8px; }
     code { background: rgba(255,255,255,.08); padding: 2px 6px; border-radius: 8px; }
-  </style>
+  
+    .preview {
+      margin-top: 12px;
+      max-height: 320px;
+      overflow: auto;
+      border:1px solid rgba(255,255,255,.12);
+      border-radius: 12px;
+    }
+    .preview table {
+      width:100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .preview th, .preview td {
+      border-bottom:1px solid rgba(255,255,255,.08);
+      padding: 6px 8px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .preview th {
+      position: sticky;
+      top: 0;
+      background: rgba(20,20,40,.92);
+      font-weight: 650;
+      z-index: 1;
+    }
+
+</style>
 </head>
 
 <body>
@@ -56,7 +83,7 @@
         Ожидается лист <code>Группы</code> и колонки: «Потрачено всего, ₽», «Показы», «Начали прослушивание», «Добавили аудио», «Название группы». Опционально: «Цена за добавление аудио, ₽» (для подсветки).
       </div>
 
-      <div id="log" class="log"></div>
+      <div id="preview" class="preview"></div>
     </div>
   </div>
 
@@ -67,6 +94,26 @@
       <div class="small">Author: mirthfulnik</div>
     </div>
   </div>
+
+
+  <div id="toast" style="
+    position:fixed;
+    bottom:24px;
+    right:24px;
+    background: var(--btn);
+    color:white;
+    padding:12px 16px;
+    border-radius:12px;
+    opacity:0;
+    transform: translateY(8px);
+    transition: .25s;
+    z-index:100;
+    box-shadow: 0 10px 28px rgba(0,0,0,.35);
+    pointer-events:none;
+    font-weight:650;
+    font-size:13px;
+  ">Файл готов, начинается скачивание</div>
+
 
   <!-- ExcelJS + FileSaver (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
@@ -79,12 +126,13 @@
 
     const $file = document.getElementById('file');
     const $run  = document.getElementById('run');
-    const $log  = document.getElementById('log');
     const $overlay = document.getElementById('overlay');
+    const $preview = document.getElementById('preview');
+    const $toast = document.getElementById('toast');
 
     $file.addEventListener('change', () => {
       $run.disabled = !$file.files || !$file.files[0];
-      $log.textContent = '';
+      $preview.innerHTML = '';
     });
 
     $run.addEventListener('click', async () => {
@@ -95,7 +143,6 @@
       const outName = baseName + ' (enriched).xlsx';
 
       showOverlay(true);
-      log('Читаю файл…');
 
       try {
         const buffer = await inFile.arrayBuffer();
@@ -105,7 +152,7 @@
         const inWs = inWb.getWorksheet('Группы') || inWb.worksheets[0];
         if (!inWs) throw new Error('Не найден ни один лист в книге.');
 
-        log('Нашёл лист: ' + (inWs.name || '(без имени)'));
+                renderPreview(inWs);
         const headerRow = inWs.getRow(1);
 
         // Read headers (1-based cells)
@@ -166,9 +213,6 @@
           throw new Error('Не найдены обязательные колонки: ' + missing.join(', ') +
             '.\\nПроверь, что это выгрузка ВК на уровне групп и что заголовки в первой строке.');
         }
-
-        log(`Колонки найдены: spent=${spentCol}, impr=${imprCol}, start=${startCol}, add=${addCol}, group=${groupNameCol}` + (cpaCol ? `, cpa=${cpaCol}` : ', cpa=— (не найдено)'));
-
         // Create output workbook
         const outWb = new ExcelJS.Workbook();
         outWb.creator = 'mirthfulnik';
@@ -249,7 +293,6 @@
         const outLaunchCol = planOffset + groupNameCol; // inserted "Запуск" column position (1-based)
 
         const lastInRow = Math.max(2, inWs.rowCount || 2);
-        log('Копирую строки и проставляю формулы…');
 
         // Collect rows first to allow ranking (CR1 desc, then CR2 desc)
         const rowsToWrite = [];
@@ -418,7 +461,6 @@ if (outCpaCol) {
   const cpaL = colToLetter(outCpaCol);
   addCFText(outCpaCol, `AND(${cpaL}2<>"",${cpaL}2<AVERAGE($${cpaL}$2:$${cpaL}$${lastOutRow}))`);
 } else {
-  log('Колонка "Цена за добавление аудио, ₽" не найдена — условное форматирование для неё пропущено.');
 }
         // Borders + basic row styling (только в пределах фактических строк)
         const border = {
@@ -435,7 +477,6 @@ if (outCpaCol) {
 
 
         // ---- Sheet 2: "Прогноз" ----
-        log('Создаю лист "Прогноз"…');
         const outForecast = outWb.addWorksheet('Прогноз', { views: [{ state: 'frozen', ySplit: 1 }] });
 
         outForecast.addRow(['Метрика', 'Значение']);
@@ -494,29 +535,88 @@ if (outCpaCol) {
           outForecast.getRow(r).eachCell({ includeEmpty: true }, (cell) => { cell.border = border; });
         }
 
-        log('Готово. Собираю файл…');
         const outBuf = await outWb.xlsx.writeBuffer();
         saveAs(
           new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
           outName
         );
-        log('Скачивание началось: ' + outName);
+        showToast('Файл готов, начинается скачивание');
 
       } catch (err) {
         console.error(err);
-        log('Ошибка: ' + (err && err.message ? err.message : String(err)));
+        showToast('Ошибка: ' + (err && err.message ? err.message : String(err)));
         alert(err && err.message ? err.message : String(err));
       } finally {
         showOverlay(false);
       }
     });
 
+
+    function showToast(msg) {
+      if (!$toast) return;
+      $toast.textContent = msg;
+      $toast.style.opacity = 1;
+      $toast.style.transform = 'translateY(0)';
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => {
+        $toast.style.opacity = 0;
+        $toast.style.transform = 'translateY(8px)';
+      }, 2200);
+    }
+
+    function renderPreview(ws, limit = 20) {
+      if (!$preview) return;
+
+      const headerRow = ws.getRow(1);
+      const headers = [];
+      for (let c = 1; c <= ws.columnCount; c++) {
+        headers.push(headerRow.getCell(c).value ?? '');
+      }
+
+      const esc = (v) => String(v ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+      let html = '<table><thead><tr>';
+      headers.forEach(h => { html += `<th>${esc(h)}</th>`; });
+      html += '</tr></thead><tbody>';
+
+      const maxRow = Math.min(ws.rowCount || 1, limit + 1);
+      for (let r = 2; r <= maxRow; r++) {
+        const row = ws.getRow(r);
+        // skip fully empty rows
+        let hasAny = false;
+        for (let c = 1; c <= ws.columnCount; c++) {
+          const v = row.getCell(c).value;
+          if (v !== null && v !== undefined && String(v).trim() !== '') { hasAny = true; break; }
+        }
+        if (!hasAny) continue;
+
+        html += '<tr>';
+        for (let c = 1; c <= ws.columnCount; c++) {
+          let v = row.getCell(c).value;
+          if (typeof v === 'object' && v) {
+            if ('result' in v) v = v.result;
+            else if ('text' in v) v = v.text;
+            else if ('richText' in v && Array.isArray(v.richText)) v = v.richText.map(x => x.text).join('');
+          }
+          html += `<td>${esc(v)}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+
+      $preview.innerHTML = html;
+    }
+
     function showOverlay(on) {
       $overlay.style.display = on ? 'flex' : 'none';
       $run.disabled = on || !$file.files || !$file.files[0];
       $file.disabled = !!on;
     }
-    function log(msg) { $log.textContent += (msg + '\\n'); }
   </script>
 </body>
 </html>
